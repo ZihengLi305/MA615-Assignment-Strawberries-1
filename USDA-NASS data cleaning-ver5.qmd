@@ -1,0 +1,162 @@
+---
+title: "Stawberries 3"
+author: MA615
+date: 2024 Sept 30
+format:
+  html:
+    embed-resources: true
+editor: visual
+---
+
+# Version 5
+
+We ditch the counties
+
+# Preparing data for analysis
+
+Acquire, explore, clean & structure, EDA
+
+### Data cleaning and organization
+
+["An introduction to data cleaning with R" by Edwin de Jonge and Mark van der Loo](https://cran.r-project.org/doc/contrib/de_Jonge+van_der_Loo-Introduction_to_data_cleaning_with_R.pdf)
+
+["Problems, Methods, and Challenges in Comprehensive Data Cleansing" by Heiko Müller and Johann-Christoph Freytag](https://www.researchgate.net/profile/Heiko-Mueller/publication/228929938_Problems_methods_and_challenges_in_comprehensive_data_cleansing/links/09e415101b58541e2c000000/Problems-methods-and-challenges-in-comprehensive-data-cleansing.pdf)
+
+## Strawberries
+
+**Questions**
+
+-   Where they are grown? By whom?
+
+-   Are they really loaded with carcinogenic poisons?
+
+-   Are they really good for your health? Bad for your health?
+
+-   Are organic strawberries carriers of deadly diseases?
+
+-   When I go to the market should I buy conventional or organic strawberries?
+
+-   Do Strawberry farmers make money?
+
+-   How do the strawberries I buy get to my market?
+
+## The data
+
+The data set for this assignment has been selected from:
+
+\[[USDA_NASS_strawb_2024SEP25](https://quickstats.nass.usda.gov) The data have been stored on NASS here: [USDA_NASS_strawb_2024SEP25](https://quickstats.nass.usda.gov/results/28141CE5-7429-36C3-A385-33ACC8030763)
+
+and has been stored on the blackboard as strawberries25_v3.csv.
+
+## read and explore the data
+
+Set-up
+
+```{r}
+#| label: load libraries and set options
+#| warning: false
+#| message: false
+#| echo: false
+
+#install.packages("stringr")
+#install.packages("dplyr")
+library(dplyr)
+library(stringr)
+library(readr)
+library(ggplot2)
+
+
+```
+
+Read the data and take a first look
+
+```{r}
+#install.packages("stringr")
+#install.packages("dplyr")
+library(dplyr)
+library(stringr)
+library(readr)
+library(ggplot2)
+
+strawberry_data <- read_csv("strawberries25_v3.csv")
+split_chemical_data <- function(domain_category) {
+  # Check if 'domain_category' is NA or does not contain the word 'CHEMICAL'
+  if (is.na(domain_category) || !grepl("CHEMICAL", domain_category)) {
+    return(c(NA, NA, NA))
+  }
+  
+  # Extract chemical info with a code (e.g., "CHEMICAL: (USE = CODE)")
+  match_with_code <- regmatches(domain_category, regexec("([A-Z ]+): \\(([^=]+) = (\\d+)\\)", domain_category))
+  
+  # Extract chemical info without a code (e.g., "CHEMICAL: (USE)")
+  match_without_code <- regmatches(domain_category, regexec("([A-Z ]+): \\(([^)]+)\\)", domain_category))
+  
+  # If 'match_with_code' succeeds, return chemical name, use, and code
+  if (length(match_with_code[[1]]) == 4) {
+    return(c(trimws(match_with_code[[1]][2]), trimws(match_with_code[[1]][3]), match_with_code[[1]][4]))
+    
+  # If 'match_without_code' succeeds, return chemical name, use, and NA
+  } else if (length(match_without_code[[1]]) == 3) {
+    return(c(trimws(match_without_code[[1]][2]), trimws(match_without_code[[1]][3]), NA))
+    
+  # Return NAs if neither pattern matches
+  } else {
+    return(c(NA, NA, NA))
+  }
+}
+
+# Apply the function to the Domain Category column
+split_data <- t(sapply(strawberry_data$`Domain Category`, split_chemical_data))
+strawberry_data <- cbind(strawberry_data, split_data)
+colnames(strawberry_data)[(ncol(strawberry_data)-2):ncol(strawberry_data)] <- c("use", "name", "code")
+
+# Modify 'strawberry_data' to update 'use' and 'name' columns based on 'Domain Category'
+strawberry_data <- strawberry_data %>%
+  # Set 'use' to "ORGANIC STATUS" if 'Domain Category' contains "ORGANIC STATUS: (NOP USDA CERTIFIED)"
+  mutate(
+    use = ifelse(grepl("ORGANIC STATUS: \\(NOP USDA CERTIFIED\\)", `Domain Category`), 
+                 "ORGANIC STATUS", use),
+    # Set 'name' to "NOP USDA CERTIFIED" if 'Domain Category' contains "ORGANIC STATUS: (NOP USDA CERTIFIED)"
+    name = ifelse(grepl("ORGANIC STATUS: \\(NOP USDA CERTIFIED\\)", `Domain Category`), 
+                  "NOP USDA CERTIFIED", name)
+  )
+
+# Modify 'strawberry_data' to update 'use' and 'name' columns based on 'Domain Category' containing "FERTILIZER"
+strawberry_data <- strawberry_data %>%
+  # Set 'use' to "FERTILIZER" where 'Domain Category' contains "FERTILIZER", if 'use' is currently NA
+  mutate(
+    use = coalesce(use, if_else(str_detect(`Domain Category`, "FERTILIZER"), "FERTILIZER", NA_character_)),
+    # Set 'name' to text within parentheses after "FERTILIZER" if 'name' is currently NA
+    name = coalesce(name, if_else(str_detect(`Domain Category`, "FERTILIZER"), str_extract(`Domain Category`, "(?<=FERTILIZER: \\().+?(?=\\))"), NA_character_))
+  )
+
+# Filter 'strawberry_data' to create 'strawberry_AREA' with rows containing "AREA GROWN" or "ORGANIC STATUS" in 'Domain'
+strawberry_AREA <- strawberry_data %>% filter(grepl('AREA GROWN|ORGANIC STATUS',Domain))
+# Filter 'strawberry_data' to create 'strawberry_Chemical' with rows containing "CHEMICAL" or "FERTILIZER" in 'Domain'
+strawberry_Chemical<- strawberry_data %>% filter(grepl('CHEMICAL|FERTILIZER',Domain))
+
+# Modify 'strawberry_AREA' to add 'Min' and 'Max' columns based on 'Domain Category'
+strawberry_AREA <- strawberry_AREA %>%
+  # Set 'Min' to the value before "OR MORE" or extract the first number in parentheses
+  mutate(
+    Min = case_when(
+      str_detect(`Domain Category`, "OR MORE") ~ str_extract(`Domain Category`, "\\d+(?= OR MORE)"),
+      TRUE ~ str_extract(`Domain Category`, "(?<=\\()\\d+\\.\\d+|(?<=\\()\\d+")
+    ),
+    # Set 'Max' to "More" if "OR MORE" is present, otherwise extract the number after "TO"
+    Max = case_when(
+      str_detect(`Domain Category`, "OR MORE") ~ "More",
+      TRUE ~ str_extract(`Domain Category`, "(?<=TO )\\d+\\.\\d+|(?<=TO )\\d+")
+    )
+  )
+
+strawberry_combined <- bind_rows(strawberry_AREA, strawberry_Chemical)
+write.csv(strawberry_combined, "strawberry_combined.csv", row.names = FALSE)
+
+ggplot(strawberry_combined, aes(x = as.numeric(Min))) +
+  geom_histogram(binwidth = 5, fill = "lightgreen", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Minimum Area Sizes", x = "Minimum Area Size (acres)", y = "Frequency") +
+  theme_minimal()
+```
+
+Most strawberry acreage is small, with the largest number of plots being between 0 and 5 acres in size. The frequency of occurrence decreases as the size of the smallest plots increases.
